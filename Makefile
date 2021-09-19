@@ -1,7 +1,7 @@
 APP_NAME := main
 
-all: $(APP_NAME)
-	g++ -std=c++17 -Wall -Wextra main.cpp
+all:
+	g++ -std=c++17 -lpthread -Wall -Wextra -o $(APP_NAME) main.cpp
 
 .PHONY: clean
 clean:

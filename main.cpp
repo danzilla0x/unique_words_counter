@@ -1,9 +1,13 @@
+
 #include <algorithm>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <sstream>
 #include <unordered_set>
+#include <vector>
 
 /*
 - Please submit the complete C++ source code for a program that counts the number 
@@ -16,7 +20,7 @@ of distinct unique words in a file whose name is passed as an argument to a prog
 - The solution must utilize all available CPU resources.
 */
 
-constexpr uint64_t BYTES_CHUNK = 65536;
+constexpr uint64_t BYTES_CHUNK = 262144;
 
 void print_set(const std::unordered_set<std::string> &data) {
     std::cout << "Size of the set: " << data.size() << std::endl;
@@ -25,18 +29,23 @@ void print_set(const std::unordered_set<std::string> &data) {
     std::cout << std::endl;
 }
 
-std::unordered_set<std::string> result_set;
+static std::mutex setMutex;
+static std::unordered_set<std::string> result_set;
 
-unsigned countUniqueWords(std::string words, unsigned bytesRead) {
+static void countUniqueWords(std::string words, unsigned bytesRead) {
+    std::unordered_set<std::string> tempSet;
     std::istringstream iss(words);
 
     std::copy_n(std::istream_iterator<std::string>(iss),
                 bytesRead,
-                std::inserter(result_set, std::end(result_set)));
+                std::inserter(tempSet, std::end(tempSet)));
 
-    // print_set(result_set);
-
-    return result_set.size();
+    // Critical section to insert filtered words into the common set
+    // This is a bottle neck for real multithread performing
+    {
+        std::lock_guard<std::mutex> l(setMutex);
+        result_set.insert(tempSet.begin(), tempSet.end());
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -58,29 +67,39 @@ int main(int argc, char *argv[]) {
     fin.seekg(pos, std::ios::beg);  // Move to the begin of file
     std::cout << "File length: " << fileLength << '\n';
 
+    std::vector<std::future<void>> futures;
+    static size_t counter = 0;
+
     while (!fin.eof()) {
-        // read chunk
+        // read chunk of data to the string
         std::string contents(BYTES_CHUNK, ' ');
         fin.read(&contents[0], BYTES_CHUNK);
         auto bytesRead = fin.gcount();
 
-        // std::cout << contents.size() << std::endl;
-        // std::cout << "[" << contents << "]" << std::endl;
-        // std::cout << "bytesRead: " << bytesRead << '\n';
+        // move string with workds to the separate task
+        futures.emplace_back(std::async(std::launch::async,
+                                        countUniqueWords,
+                                        std::move(contents),
+                                        bytesRead));
 
-        // pass to processing function data and real size
-        countUniqueWords(std::move(contents), bytesRead);
-        // std::cout << "----------------------------------\n";
+        if (++counter % 500 == 0)
+            std::cout << counter << " of futures created\n";
 
         // seek to the nearest space on the left
         while (!fin.eof() && fin.peek() != ' ') {
             fin.seekg(-1, std::ios::cur);
-            // std::cout << "Char read in while: " << fin.peek() << std::endl;
         }
     }
 
-    unsigned uniqueWords = result_set.size();
-    std::cout << "uniqueWords: " << uniqueWords << std::endl;
+    std::cout << "futures vector size: " << futures.size() << "\n";
+    for (auto &fut : futures) {
+        fut.get();
+        if (--counter % 500 == 0)
+            std::cout << counter << " futures left\n";
+    }
+
+    auto uniqueWords = result_set.size();
+    std::cout << "Unique words found: " << uniqueWords << std::endl;
 
     return 0;
 }
